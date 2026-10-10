@@ -1,15 +1,21 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 #include "builtin.h"
 #include "history.h"
 #include "pagesim.h"
 #include "cpusched.h"
 #include "memalloc.h"
+#include "jobs.h"
+#include "job_control.h"
 
 /* =========================================================
    BUILTIN: cd
@@ -116,6 +122,9 @@ static int builtin_help(command_t *cmd)
     printf("  touch <file> - create empty file\n");
     printf("  cat <file>   - display file contents\n");
     printf("  date         - show current date/time\n");
+    printf("  jobs         - list active background/stopped jobs\n");
+    printf("  fg <job_id>  - bring background/stopped job to foreground\n");
+    printf("  bg <job_id>  - resume stopped job in background\n");
     printf("  pagesim      - page replacement simulator (FIFO, LRU, Optimal)\n");
     printf("  cpusched     - CPU scheduling simulator (FCFS, SJF, RR, Priority)\n");
     printf("  memalloc     - memory allocation simulator (First-Fit, Best-Fit, Worst-Fit)\n");
@@ -240,6 +249,110 @@ static int builtin_date(command_t *cmd)
 }
 
 /* =========================================================
+   BUILTIN: jobs
+   ========================================================= */
+static int builtin_jobs(command_t *cmd)
+{
+    (void)cmd;
+    jobs_print();
+    return 0;
+}
+
+/* =========================================================
+   BUILTIN: fg
+   ========================================================= */
+static int builtin_fg(command_t *cmd)
+{
+    int job_id;
+    job_t *job;
+    int status;
+
+    if (cmd->argc < 2) {
+        printf("fg: usage: fg <job number>\n");
+        return 1;
+    }
+
+    job_id = atoi(cmd->argv[1]);
+    job = job_find(job_id);
+
+    if (job == NULL) {
+        printf("fg: no such job: %d\n", job_id);
+        return 1;
+    }
+
+    /* Give terminal to job */
+    give_terminal_to(job->pgid);
+
+    /* Continue stopped process group */
+    if (job->state == JOB_STOPPED) {
+        kill(-job->pgid, SIGCONT);
+    }
+
+    job_continue(job->pgid);
+
+    /* Wait for the process group */
+    while (1) {
+        pid_t result = waitpid(-job->pgid, &status, WUNTRACED);
+        if (result < 0) {
+            break;
+        }
+
+        if (WIFSTOPPED(status)) {
+            job_stop(job->pgid);
+            break;
+        }
+
+        if (WIFEXITED(status) || WIFSIGNALED(status)) {
+            job_done(job->pgid);
+            break;
+        }
+    }
+
+    /* Give terminal back to Shellforge */
+    take_terminal_back();
+
+    /* Remove completed job */
+    if (job->state == JOB_DONE) {
+        job_remove(job_id);
+    }
+
+    return 0;
+}
+
+/* =========================================================
+   BUILTIN: bg
+   ========================================================= */
+static int builtin_bg(command_t *cmd)
+{
+    int job_id;
+    job_t *job;
+
+    if (cmd->argc < 2) {
+        fprintf(stderr, "bg: usage: bg <job number>\n");
+        return 1;
+    }
+
+    job_id = atoi(cmd->argv[1]);
+    job = job_find(job_id);
+
+    if (job == NULL) {
+        fprintf(stderr, "bg: job not found: %d\n", job_id);
+        return 1;
+    }
+
+    if (kill(-job->pgid, SIGCONT) == -1) {
+        perror("bg: kill");
+        return 1;
+    }
+
+    job_continue(job->pgid);
+
+    printf("[%d] %s &\n", job->job_id, job->command);
+
+    return 0;
+}
+
+/* =========================================================
    CHECK WHETHER COMMAND IS A BUILTIN
    ========================================================= */
 int is_builtin(const command_t *cmd)
@@ -250,10 +363,11 @@ int is_builtin(const command_t *cmd)
     const char *builtins[] = {
         "cd", "pwd", "echo", "exit", "clear", "help", "history",
         "whoami", "mkdir", "rmdir", "touch", "cat", "date",
+        "jobs", "fg", "bg",
         "pagesim", "cpusched", "memalloc"
     };
 
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < 19; i++) {
         if (strcmp(name, builtins[i]) == 0) return 1;
     }
     return 0;
@@ -278,7 +392,10 @@ int execute_builtin(command_t *cmd)
     if (strcmp(cmd->argv[0], "rmdir") == 0) return builtin_rmdir(cmd);
     if (strcmp(cmd->argv[0], "touch") == 0) return builtin_touch(cmd);
     if (strcmp(cmd->argv[0], "cat") == 0) return builtin_cat(cmd);
-    if (strcmp(cmd->argv[0], "date") == 0)    return builtin_date(cmd);
+    if (strcmp(cmd->argv[0], "date") == 0) return builtin_date(cmd);
+    if (strcmp(cmd->argv[0], "jobs") == 0) return builtin_jobs(cmd);
+    if (strcmp(cmd->argv[0], "fg") == 0) return builtin_fg(cmd);
+    if (strcmp(cmd->argv[0], "bg") == 0) return builtin_bg(cmd);
     if (strcmp(cmd->argv[0], "pagesim") == 0) return builtin_pagesim(cmd);
     if (strcmp(cmd->argv[0], "cpusched") == 0) return builtin_cpusched(cmd);
     if (strcmp(cmd->argv[0], "memalloc") == 0) return builtin_memalloc(cmd);
