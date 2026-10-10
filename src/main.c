@@ -12,6 +12,7 @@
 #include "builtin.h"
 #include "executor.h"
 #include "jobs.h"
+#include "job_control.h"
 
 /* =========================================================
    DYNAMIC SHELLFORGE PROMPT
@@ -67,6 +68,7 @@ int main(void)
        ============================================= */
 
     jobs_init();
+    job_control_init();
     setup_background_handler();
 
     using_history();
