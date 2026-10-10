@@ -17,6 +17,7 @@
 #include "executor.h"
 #include "builtin.h"
 #include "jobs.h"
+#include "job_control.h"
 
 
 /* =========================================================
@@ -29,14 +30,11 @@
 static void sigchld_handler(int sig)
 {
     int saved_errno = errno;
-
     (void)sig;
 
     while (waitpid(-1, NULL, WNOHANG) > 0)
     {
-        /*
-         * Reap completed child.
-         */
+        /* Reap completed background child */
     }
 
     errno = saved_errno;
@@ -50,13 +48,10 @@ static void sigchld_handler(int sig)
 void setup_background_handler(void)
 {
     struct sigaction sa;
-
     memset(&sa, 0, sizeof(sa));
 
     sa.sa_handler = sigchld_handler;
-
     sigemptyset(&sa.sa_mask);
-
     sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
 
     if (sigaction(SIGCHLD, &sa, NULL) < 0)
@@ -75,19 +70,12 @@ void setup_background_handler(void)
 static int block_sigchld(sigset_t *old_mask)
 {
     sigset_t set;
-
     sigemptyset(&set);
-
     sigaddset(&set, SIGCHLD);
 
-    if (sigprocmask(
-            SIG_BLOCK,
-            &set,
-            old_mask
-        ) < 0)
+    if (sigprocmask(SIG_BLOCK, &set, old_mask) < 0)
     {
         perror("sigprocmask");
-
         return -1;
     }
 
@@ -99,15 +87,9 @@ static int block_sigchld(sigset_t *old_mask)
    RESTORE SIGNAL MASK
    ========================================================= */
 
-static void restore_signal_mask(
-    const sigset_t *old_mask
-)
+static void restore_signal_mask(const sigset_t *old_mask)
 {
-    if (sigprocmask(
-            SIG_SETMASK,
-            old_mask,
-            NULL
-        ) < 0)
+    if (sigprocmask(SIG_SETMASK, old_mask, NULL) < 0)
     {
         perror("sigprocmask");
     }
@@ -122,99 +104,53 @@ static int apply_redirection(command_t *cmd)
 {
     int fd;
 
-
-    /* =====================================================
-       INPUT REDIRECTION <
-       ===================================================== */
-
+    /* INPUT REDIRECTION < */
     if (cmd->input[0] != '\0')
     {
-        fd = open(
-            cmd->input,
-            O_RDONLY
-        );
-
+        fd = open(cmd->input, O_RDONLY);
         if (fd < 0)
         {
             perror(cmd->input);
-
             return -1;
         }
 
-
-        if (dup2(
-                fd,
-                STDIN_FILENO
-            ) < 0)
+        if (dup2(fd, STDIN_FILENO) < 0)
         {
             perror("dup2 input");
-
             close(fd);
-
             return -1;
         }
-
 
         close(fd);
     }
 
-
-    /* =====================================================
-       OUTPUT REDIRECTION > or >>
-       ===================================================== */
-
+    /* OUTPUT REDIRECTION > or >> */
     if (cmd->output[0] != '\0')
     {
         if (cmd->append)
         {
-            /* >> */
-
-            fd = open(
-                cmd->output,
-                O_WRONLY |
-                O_CREAT |
-                O_APPEND,
-                0644
-            );
+            fd = open(cmd->output, O_WRONLY | O_CREAT | O_APPEND, 0644);
         }
         else
         {
-            /* > */
-
-            fd = open(
-                cmd->output,
-                O_WRONLY |
-                O_CREAT |
-                O_TRUNC,
-                0644
-            );
+            fd = open(cmd->output, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         }
-
 
         if (fd < 0)
         {
             perror(cmd->output);
-
             return -1;
         }
 
-
-        if (dup2(
-                fd,
-                STDOUT_FILENO
-            ) < 0)
+        if (dup2(fd, STDOUT_FILENO) < 0)
         {
             perror("dup2 output");
-
             close(fd);
-
             return -1;
         }
-
 
         close(fd);
     }
-
 
     return 0;
 }
@@ -224,114 +160,63 @@ static int apply_redirection(command_t *cmd)
    PREPARE ARGUMENTS FOR execvp()
    ========================================================= */
 
-static void prepare_arguments(
-    command_t *cmd,
-    char *args[]
-)
+static void prepare_arguments(command_t *cmd, char *args[])
 {
     int i;
-
-    for (i = 0;
-         i < cmd->argc;
-         i++)
+    for (i = 0; i < cmd->argc; i++)
     {
         args[i] = cmd->argv[i];
     }
-
     args[cmd->argc] = NULL;
 }
 
 
 /* =========================================================
    EXECUTE BUILTIN WITH REDIRECTION
-
-   This is used for foreground built-ins.
-
-   Example:
-
-       pwd > result.txt
-       echo hello > result.txt
    ========================================================= */
 
-static int execute_builtin_with_redirection(
-    command_t *cmd
-)
+static int execute_builtin_with_redirection(command_t *cmd)
 {
     int saved_stdin;
     int saved_stdout;
-
     int result;
 
-
-    /* Save stdin */
-
     saved_stdin = dup(STDIN_FILENO);
-
     if (saved_stdin < 0)
     {
         perror("dup stdin");
-
         return -1;
     }
 
-
-    /* Save stdout */
-
     saved_stdout = dup(STDOUT_FILENO);
-
     if (saved_stdout < 0)
     {
         perror("dup stdout");
-
         close(saved_stdin);
-
         return -1;
     }
-
-
-    /* Apply redirection */
 
     if (apply_redirection(cmd) < 0)
     {
         close(saved_stdin);
-
         close(saved_stdout);
-
         return -1;
     }
 
-
-    /* Execute builtin */
-
     result = execute_builtin(cmd);
 
-
-    /* Restore stdin */
-
-    if (dup2(
-            saved_stdin,
-            STDIN_FILENO
-        ) < 0)
+    if (dup2(saved_stdin, STDIN_FILENO) < 0)
     {
         perror("restore stdin");
     }
 
-
-    /* Restore stdout */
-
-    if (dup2(
-            saved_stdout,
-            STDOUT_FILENO
-        ) < 0)
+    if (dup2(saved_stdout, STDOUT_FILENO) < 0)
     {
         perror("restore stdout");
     }
 
-
     close(saved_stdin);
-
     close(saved_stdout);
-
 
     return result;
 }
@@ -344,237 +229,138 @@ static int execute_builtin_with_redirection(
 int execute_command(command_t *cmd)
 {
     pid_t pid;
-
     int status;
-
     sigset_t old_mask;
-
 
     if (cmd == NULL)
     {
         return -1;
     }
 
-
     if (cmd->argc == 0)
     {
         return 0;
     }
 
-
-    /* =====================================================
-       FOREGROUND BUILTIN
-       ===================================================== */
-
-    if (is_builtin(cmd) &&
-        !cmd->background)
+    /* FOREGROUND BUILTIN */
+    if (is_builtin(cmd) && !cmd->background)
     {
         return execute_builtin_with_redirection(cmd);
     }
 
-
-    /* =====================================================
-       BLOCK SIGCHLD FOR FOREGROUND COMMAND
-       ===================================================== */
-
+    /* BLOCK SIGCHLD FOR FOREGROUND COMMAND */
     if (!cmd->background)
     {
-        if (block_sigchld(
-                &old_mask
-            ) < 0)
+        if (block_sigchld(&old_mask) < 0)
         {
             return -1;
         }
     }
 
-
-    /* =====================================================
-       FORK
-       ===================================================== */
-
+    /* FORK */
     pid = fork();
-
 
     if (pid < 0)
     {
         perror("fork");
-
         if (!cmd->background)
         {
-            restore_signal_mask(
-                &old_mask
-            );
+            restore_signal_mask(&old_mask);
         }
-
         return -1;
     }
 
-
-    /* =====================================================
-       CHILD
-       ===================================================== */
-
+    /* CHILD */
     if (pid == 0)
     {
         char *args[MAX_ARGS + 1];
 
+        /* Put child in its own process group */
+        setpgid(0, 0);
 
-        /*
-         * Restore signal mask.
-         */
+        /* Reset default signal actions for child */
+        signal(SIGINT, SIG_DFL);
+        signal(SIGTSTP, SIG_DFL);
+        signal(SIGTTIN, SIG_DFL);
+        signal(SIGTTOU, SIG_DFL);
 
         if (!cmd->background)
         {
-            restore_signal_mask(
-                &old_mask
-            );
+            restore_signal_mask(&old_mask);
         }
-
-
-        /*
-         * Apply redirection.
-         */
 
         if (apply_redirection(cmd) < 0)
         {
             _exit(EXIT_FAILURE);
         }
 
-
-        /*
-         * Prepare argv.
-         */
-
-        prepare_arguments(
-            cmd,
-            args
-        );
-
-
-        /*
-         * Background builtin runs inside child.
-         */
+        prepare_arguments(cmd, args);
 
         if (is_builtin(cmd))
         {
-            int result;
-
-            result = execute_builtin(cmd);
-
+            int result = execute_builtin(cmd);
             _exit(result);
         }
 
+        execvp(args[0], args);
 
-        /*
-         * External command.
-         */
-
-        execvp(
-            args[0],
-            args
-        );
-
-
-        fprintf(
-            stderr,
-            "shellforge: %s: command not found\n",
-            args[0]
-        );
-
+        fprintf(stderr, "shellforge: %s: command not found\n", args[0]);
         _exit(127);
     }
 
-
-    /* =====================================================
-       PARENT
-       ===================================================== */
+    /* PARENT */
+    setpgid(pid, pid);
 
     if (cmd->background)
     {
-        int job_id;
-
-
-        /*
-         * Make the child its own process group.
-         */
-
-        setpgid(
-            pid,
-            pid
-        );
-
-
-        /*
-         * Add to job table.
-         */
-
-        job_id = job_add(
-            pid,
-            cmd->argv[0],
-            JOB_RUNNING
-        );
-
+        int job_id = job_add(pid, cmd->argv[0], JOB_RUNNING);
 
         if (job_id > 0)
         {
-            printf(
-                "[%d] %d\n",
-                job_id,
-                pid
-            );
-
+            printf("[%d] %d\n", job_id, pid);
             fflush(stdout);
         }
-
-
-        /*
-         * IMPORTANT:
-         * Do not wait.
-         */
 
         return 0;
     }
 
+    /* FOREGROUND WAIT WITH WUNTRACED SUPPORT FOR CTRL+Z */
+    give_terminal_to(pid);
 
-    /* =====================================================
-       FOREGROUND WAIT
-       ===================================================== */
-
-    if (waitpid(
-            pid,
-            &status,
-            0
-        ) < 0)
+    if (waitpid(pid, &status, WUNTRACED) < 0)
     {
         perror("waitpid");
-
-        restore_signal_mask(
-            &old_mask
-        );
-
+        take_terminal_back();
+        restore_signal_mask(&old_mask);
         return -1;
     }
 
+    take_terminal_back();
 
-    restore_signal_mask(
-        &old_mask
-    );
+    /* If process was stopped (e.g. by Ctrl+Z) */
+    if (WIFSTOPPED(status))
+    {
+        int job_id = job_add(pid, cmd->argv[0], JOB_STOPPED);
+        if (job_id > 0)
+        {
+            printf("\n[%d]+  Stopped                 %s\n", job_id, cmd->argv[0]);
+            fflush(stdout);
+        }
+        restore_signal_mask(&old_mask);
+        return 0;
+    }
 
-
-    /* Return exit status */
+    restore_signal_mask(&old_mask);
 
     if (WIFEXITED(status))
     {
         return WEXITSTATUS(status);
     }
 
-
     if (WIFSIGNALED(status))
     {
-        return 128 +
-               WTERMSIG(status);
+        return 128 + WTERMSIG(status);
     }
-
 
     return -1;
 }
@@ -584,521 +370,230 @@ int execute_command(command_t *cmd)
    EXECUTE PIPELINE
    ========================================================= */
 
-int execute_pipeline(
-    pipeline_t *pipeline
-)
+int execute_pipeline(pipeline_t *pipeline)
 {
     int command_count;
-
     int previous_read = -1;
-
     pid_t pids[MAX_COMMANDS];
-
     int status;
-
     int final_status = 0;
-
     int i;
-
     int background;
-
     sigset_t old_mask;
-
-
-    /* =====================================================
-       VALIDATE
-       ===================================================== */
 
     if (pipeline == NULL)
     {
         return -1;
     }
 
-
-    command_count =
-        pipeline->command_count;
-
+    command_count = pipeline->command_count;
 
     if (command_count <= 0)
     {
         return 0;
     }
 
-
-    /* =====================================================
-       BACKGROUND STATUS
-
-       IMPORTANT:
-
-       pipeline_t has no background member.
-
-       '&' is stored in the last command.
-       ===================================================== */
-
-    background =
-        pipeline
-            ->commands[
-                command_count - 1
-            ]
-            .background;
-
-
-    /* =====================================================
-       SINGLE COMMAND
-       ===================================================== */
+    background = pipeline->commands[command_count - 1].background;
 
     if (command_count == 1)
     {
-        return execute_command(
-            &pipeline->commands[0]
-        );
+        return execute_command(&pipeline->commands[0]);
     }
-
-
-    /* =====================================================
-       BLOCK SIGCHLD FOR FOREGROUND PIPELINE
-       ===================================================== */
 
     if (!background)
     {
-        if (block_sigchld(
-                &old_mask
-            ) < 0)
+        if (block_sigchld(&old_mask) < 0)
         {
             return -1;
         }
     }
 
-
-    /* =====================================================
-       CREATE PIPELINE
-       ===================================================== */
-
-    for (i = 0;
-         i < command_count;
-         i++)
+    for (i = 0; i < command_count; i++)
     {
         int pipefd[2];
-
-
-        /* =================================================
-           CREATE PIPE
-
-           No pipe is required after final command.
-           ================================================= */
 
         if (i < command_count - 1)
         {
             if (pipe(pipefd) < 0)
             {
                 perror("pipe");
-
                 if (!background)
                 {
-                    restore_signal_mask(
-                        &old_mask
-                    );
+                    restore_signal_mask(&old_mask);
                 }
-
                 return -1;
             }
         }
 
-
-        /* =================================================
-           FORK
-           ================================================= */
-
         pids[i] = fork();
-
 
         if (pids[i] < 0)
         {
             perror("fork");
-
             if (!background)
             {
-                restore_signal_mask(
-                    &old_mask
-                );
+                restore_signal_mask(&old_mask);
             }
-
             return -1;
         }
 
-
-        /* =================================================
-           CHILD
-           ================================================= */
-
+        /* CHILD */
         if (pids[i] == 0)
         {
-            command_t *cmd;
-
+            command_t *cmd = &pipeline->commands[i];
             char *args[MAX_ARGS + 1];
-
             int j;
-
-
-            cmd =
-                &pipeline->commands[i];
-
-
-            /*
-             * =============================================
-             * PROCESS GROUP
-             * =============================================
-             */
 
             if (i == 0)
             {
-                /*
-                 * First process becomes process-group
-                 * leader.
-                 */
-
-                if (setpgid(
-                        0,
-                        0
-                    ) < 0)
-                {
-                    perror("setpgid");
-                }
+                setpgid(0, 0);
             }
             else
             {
-                /*
-                 * Remaining processes join first
-                 * process's group.
-                 */
-
-                if (setpgid(
-                        0,
-                        pids[0]
-                    ) < 0)
-                {
-                    perror("setpgid");
-                }
+                setpgid(0, pids[0]);
             }
 
-
-            /*
-             * Restore signal mask.
-             */
+            signal(SIGINT, SIG_DFL);
+            signal(SIGTSTP, SIG_DFL);
+            signal(SIGTTIN, SIG_DFL);
+            signal(SIGTTOU, SIG_DFL);
 
             if (!background)
             {
-                restore_signal_mask(
-                    &old_mask
-                );
+                restore_signal_mask(&old_mask);
             }
-
-
-            /* =============================================
-               INPUT FROM PREVIOUS PIPE
-               ============================================= */
 
             if (previous_read != -1)
             {
-                if (dup2(
-                        previous_read,
-                        STDIN_FILENO
-                    ) < 0)
+                if (dup2(previous_read, STDIN_FILENO) < 0)
                 {
-                    perror(
-                        "dup2 previous pipe"
-                    );
-
+                    perror("dup2 previous pipe");
                     _exit(EXIT_FAILURE);
                 }
             }
-
-
-            /* =============================================
-               OUTPUT TO NEXT PIPE
-               ============================================= */
 
             if (i < command_count - 1)
             {
-                if (dup2(
-                        pipefd[1],
-                        STDOUT_FILENO
-                    ) < 0)
+                if (dup2(pipefd[1], STDOUT_FILENO) < 0)
                 {
-                    perror(
-                        "dup2 next pipe"
-                    );
-
+                    perror("dup2 next pipe");
                     _exit(EXIT_FAILURE);
                 }
             }
-
-
-            /* =============================================
-               CLOSE PREVIOUS PIPE
-               ============================================= */
 
             if (previous_read != -1)
             {
                 close(previous_read);
             }
 
-
-            /* =============================================
-               CLOSE CURRENT PIPE
-               ============================================= */
-
             if (i < command_count - 1)
             {
                 close(pipefd[0]);
-
                 close(pipefd[1]);
             }
-
-
-            /* =============================================
-               FILE REDIRECTION
-               ============================================= */
 
             if (apply_redirection(cmd) < 0)
             {
                 _exit(EXIT_FAILURE);
             }
 
-
-            /* =============================================
-               PREPARE ARGUMENTS
-               ============================================= */
-
-            for (j = 0;
-                 j < cmd->argc;
-                 j++)
+            for (j = 0; j < cmd->argc; j++)
             {
-                args[j] =
-                    cmd->argv[j];
+                args[j] = cmd->argv[j];
             }
-
-            args[cmd->argc] =
-                NULL;
-
-
-            /* =============================================
-               BUILTIN
-               ============================================= */
+            args[cmd->argc] = NULL;
 
             if (is_builtin(cmd))
             {
-                int result;
-
-                result =
-                    execute_builtin(cmd);
-
+                int result = execute_builtin(cmd);
                 _exit(result);
             }
 
+            execvp(args[0], args);
 
-            /* =============================================
-               EXTERNAL COMMAND
-               ============================================= */
-
-            execvp(
-                args[0],
-                args
-            );
-
-
-            fprintf(
-                stderr,
-                "shellforge: %s: command not found\n",
-                args[0]
-            );
-
+            fprintf(stderr, "shellforge: %s: command not found\n", args[0]);
             _exit(127);
         }
 
-
-        /* =================================================
-           PARENT
-           ================================================= */
-
-
-        /*
-         * Establish process group in parent too.
-
-         * This avoids a race between parent and child.
-         */
-
+        /* PARENT */
         if (i == 0)
         {
-            setpgid(
-                pids[i],
-                pids[i]
-            );
+            setpgid(pids[i], pids[i]);
         }
         else
         {
-            setpgid(
-                pids[i],
-                pids[0]
-            );
+            setpgid(pids[i], pids[0]);
         }
-
-
-        /* ================================================
-           CLOSE PREVIOUS READ END
-           ================================================ */
 
         if (previous_read != -1)
         {
             close(previous_read);
-
             previous_read = -1;
         }
-
-
-        /* ================================================
-           SAVE READ END FOR NEXT COMMAND
-           ================================================ */
 
         if (i < command_count - 1)
         {
             close(pipefd[1]);
-
-            previous_read =
-                pipefd[0];
+            previous_read = pipefd[0];
         }
     }
-
-
-    /* =====================================================
-       BACKGROUND PIPELINE
-       ===================================================== */
 
     if (background)
     {
         int job_id;
+        char command_string[MAX_JOB_COMMAND] = "";
 
-        char command_string[MAX_JOB_COMMAND];
-
-
-        /*
-         * Build a simple command description.
-         */
-
-        command_string[0] =
-            '\0';
-
-
-        for (i = 0;
-             i < command_count;
-             i++)
+        for (i = 0; i < command_count; i++)
         {
-            command_t *cmd;
-
-            cmd =
-                &pipeline->commands[i];
-
-
+            command_t *cmd = &pipeline->commands[i];
             if (i > 0)
             {
-                strncat(
-                    command_string,
-                    " | ",
-                    sizeof(command_string)
-                    -
-                    strlen(command_string)
-                    - 1
-                );
+                strncat(command_string, " | ", sizeof(command_string) - strlen(command_string) - 1);
             }
-
-
             if (cmd->argc > 0)
             {
-                strncat(
-                    command_string,
-                    cmd->argv[0],
-                    sizeof(command_string)
-                    -
-                    strlen(command_string)
-                    - 1
-                );
+                strncat(command_string, cmd->argv[0], sizeof(command_string) - strlen(command_string) - 1);
             }
         }
 
-
-        /*
-         * Add pipeline as one job.
-
-         * pids[0] is the process-group ID.
-         */
-
-        job_id =
-            job_add(
-                pids[0],
-                command_string,
-                JOB_RUNNING
-            );
-
+        job_id = job_add(pids[0], command_string, JOB_RUNNING);
 
         if (job_id > 0)
         {
-            printf(
-                "[%d] %d\n",
-                job_id,
-                pids[0]
-            );
-
+            printf("[%d] %d\n", job_id, pids[0]);
             fflush(stdout);
         }
-
-
-        /*
-         * DO NOT WAIT.
-         */
 
         return 0;
     }
 
+    /* FOREGROUND PIPELINE WAIT */
+    give_terminal_to(pids[0]);
 
-    /* =====================================================
-       FOREGROUND PIPELINE
-       ===================================================== */
-
-    for (i = 0;
-         i < command_count;
-         i++)
+    int pipeline_stopped = 0;
+    for (i = 0; i < command_count; i++)
     {
         status = 0;
-
-
-        if (waitpid(
-                pids[i],
-                &status,
-                0
-            ) < 0)
+        if (waitpid(pids[i], &status, WUNTRACED) < 0)
         {
             perror("waitpid");
-
             continue;
         }
 
-
-        /*
-         * Return status of final command.
-         */
+        if (WIFSTOPPED(status))
+        {
+            pipeline_stopped = 1;
+        }
 
         if (i == command_count - 1)
         {
             if (WIFEXITED(status))
             {
-                final_status =
-                    WEXITSTATUS(status);
+                final_status = WEXITSTATUS(status);
             }
             else if (WIFSIGNALED(status))
             {
-                final_status =
-                    128 +
-                    WTERMSIG(status);
+                final_status = 128 + WTERMSIG(status);
             }
             else
             {
@@ -1107,11 +602,32 @@ int execute_pipeline(
         }
     }
 
+    take_terminal_back();
 
-    restore_signal_mask(
-        &old_mask
-    );
+    if (pipeline_stopped)
+    {
+        char command_string[MAX_JOB_COMMAND] = "";
+        for (i = 0; i < command_count; i++)
+        {
+            command_t *cmd = &pipeline->commands[i];
+            if (i > 0)
+            {
+                strncat(command_string, " | ", sizeof(command_string) - strlen(command_string) - 1);
+            }
+            if (cmd->argc > 0)
+            {
+                strncat(command_string, cmd->argv[0], sizeof(command_string) - strlen(command_string) - 1);
+            }
+        }
+        int job_id = job_add(pids[0], command_string, JOB_STOPPED);
+        if (job_id > 0)
+        {
+            printf("\n[%d]+  Stopped                 %s\n", job_id, command_string);
+            fflush(stdout);
+        }
+    }
 
+    restore_signal_mask(&old_mask);
 
     return final_status;
 }
