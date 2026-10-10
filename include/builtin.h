@@ -12,6 +12,10 @@
  */
 int is_builtin(const command_t *cmd);
 
+int builtin_jobs(command_t *cmd);
+int builtin_fg(command_t *cmd);
+int builtin_bg(command_t *cmd);
+
 /*
  * Execute a built-in command.
  *

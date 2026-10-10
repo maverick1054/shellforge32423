@@ -251,7 +251,7 @@ static int builtin_date(command_t *cmd)
 /* =========================================================
    BUILTIN: jobs
    ========================================================= */
-static int builtin_jobs(command_t *cmd)
+int builtin_jobs(command_t *cmd)
 {
     (void)cmd;
     jobs_print();
@@ -261,7 +261,7 @@ static int builtin_jobs(command_t *cmd)
 /* =========================================================
    BUILTIN: fg
    ========================================================= */
-static int builtin_fg(command_t *cmd)
+int builtin_fg(command_t *cmd)
 {
     int job_id;
     job_t *job;
@@ -322,7 +322,7 @@ static int builtin_fg(command_t *cmd)
 /* =========================================================
    BUILTIN: bg
    ========================================================= */
-static int builtin_bg(command_t *cmd)
+int builtin_bg(command_t *cmd)
 {
     int job_id;
     job_t *job;
